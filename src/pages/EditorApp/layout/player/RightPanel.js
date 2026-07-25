@@ -14,6 +14,7 @@ const URL =
 
 import CropUI from "../editor/CropUI";
 import AudioUI from "../editor/AudioUI";
+import S3Settings from "./settings/S3Settings";
 
 import { ContentStateContext } from "../../context/ContentState";
 
@@ -21,6 +22,11 @@ const RightPanel = () => {
   const [contentState, setContentState] = useContext(ContentStateContext);
   const contentStateRef = useRef(contentState);
   const consoleErrorRef = useRef([]);
+  const [settingsView, setSettingsView] = useState(null);
+  const [youtubeStatus, setYoutubeStatus] = useState(null);
+  const [youtubeUploadProgress, setYoutubeUploadProgress] = useState(null);
+  const [youtubeUploadResult, setYoutubeUploadResult] = useState(null);
+  const youtubeRequestIdRef = useRef(null);
   // `disabled` on a <div role="button"> is inert, so the click still fires
   // while a save is in flight. contentStateRef lags a render, so hold the
   // in-flight lock in its own ref and clear it when saveDrive goes false
@@ -40,6 +46,16 @@ const RightPanel = () => {
   useEffect(() => {
     if (!contentState.saveDrive) saveDriveInFlight.current = false;
   }, [contentState.saveDrive]);
+
+  useEffect(() => {
+    const listener = (msg) => {
+      if (msg?.type === "youtube-upload-progress" && msg.requestId === youtubeRequestIdRef.current) {
+        setYoutubeUploadProgress(msg.progress);
+      }
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
+  }, []);
 
   const getNotAvailableLabel = () => {
     if (contentState.fallback && contentState.noffmpeg && contentState.editLimit === 0) {
@@ -223,6 +239,132 @@ const RightPanel = () => {
       ...prevContentState,
       driveEnabled: false,
     }));
+  };
+
+  const saveToS3 = async () => {
+    const config = await chrome.runtime.sendMessage({ type: "get-s3-config" });
+    if (!config?.s3Endpoint) {
+      setSettingsView("s3");
+      return;
+    }
+
+    setContentState((prev) => ({ ...prev, saveS3: true }));
+
+    const useMp4 = !contentState.noffmpeg && contentState.mp4ready && contentState.blob;
+    const source = useMp4 ? contentState.blob : contentState.webm;
+    const isWebm = !useMp4;
+
+    if (!(source instanceof Blob) || source.size === 0) {
+      setContentState((prev) => ({ ...prev, saveS3: false }));
+      return;
+    }
+
+    diagForward("editor-s3-save-start", { bytes: source.size, isWebm });
+
+    const opfsFileName = await stageBlobToOpfs(source, isWebm ? "webm" : "mp4");
+    if (opfsFileName) {
+      chrome.runtime
+        .sendMessage({
+          type: "save-to-s3",
+          opfsFileName,
+          isWebm,
+          title: contentState.title,
+        })
+        .then((response) => {
+          setContentState((prev) => ({ ...prev, saveS3: false }));
+          if (response?.status === "ok") {
+            showEditorToast(contentStateRef.current, "Saved to S3: " + response.url);
+          } else {
+            showEditorToast(contentStateRef.current, "S3 upload failed: " + (response?.error || "unknown"));
+          }
+        })
+        .catch(() => setContentState((prev) => ({ ...prev, saveS3: false })));
+      return;
+    }
+
+    setContentState((prev) => ({ ...prev, saveS3: false }));
+  };
+
+  const saveToYoutube = async () => {
+    console.log("[RightPanel] saveToYoutube: starting");
+    console.log("[RightPanel]   mp4ready:", contentState.mp4ready, "noffmpeg:", contentState.noffmpeg, "blob:", contentState.blob ? "(present)" : "null", "webm:", contentState.webm ? "(present)" : "null");
+    setYoutubeUploadProgress(0);
+    setYoutubeUploadResult(null);
+    setContentState((prev) => ({ ...prev, saveYoutube: true }));
+
+    const useMp4 = !contentState.noffmpeg && contentState.mp4ready && contentState.blob;
+    const source = useMp4 ? contentState.blob : contentState.webm;
+    const isWebm = !useMp4;
+
+    console.log("[RightPanel]   useMp4:", useMp4, "isWebm:", isWebm, "source size:", source?.size);
+
+    if (!(source instanceof Blob) || source.size === 0) {
+      console.error("[RightPanel] saveToYoutube: no valid source blob");
+      setContentState((prev) => ({ ...prev, saveYoutube: false }));
+      setYoutubeUploadProgress(null);
+      return;
+    }
+
+    diagForward("editor-youtube-save-start", { bytes: source.size, isWebm });
+
+    const opfsFileName = await stageBlobToOpfs(source, isWebm ? "webm" : "mp4");
+    console.log("[RightPanel] saveToYoutube: staged to OPFS:", opfsFileName);
+    if (opfsFileName) {
+      const requestId = crypto.randomUUID();
+      youtubeRequestIdRef.current = requestId;
+      chrome.runtime
+        .sendMessage({
+          type: "save-to-youtube",
+          opfsFileName,
+          isWebm,
+          title: contentState.title,
+          requestId,
+        })
+        .then((response) => {
+          setContentState((prev) => ({ ...prev, saveYoutube: false }));
+          setYoutubeUploadProgress(100);
+          console.log("[RightPanel] saveToYoutube: response =", JSON.stringify(response));
+          if (response?.status === "ok") {
+            setYoutubeUploadResult({ url: response.url, videoId: response.videoId });
+            showEditorToast(contentStateRef.current, "Uploaded to YouTube");
+          } else {
+            setYoutubeUploadResult(null);
+            setYoutubeUploadProgress(null);
+            showEditorToast(contentStateRef.current, "YouTube upload failed: " + (response?.error || "unknown"));
+          }
+        })
+        .catch((caughtErr) => {
+          console.error("[RightPanel] saveToYoutube: error:", caughtErr);
+          setContentState((prev) => ({ ...prev, saveYoutube: false }));
+          setYoutubeUploadProgress(null);
+        });
+      return;
+    }
+
+    console.error("[RightPanel] saveToYoutube: failed to stage to OPFS");
+    setContentState((prev) => ({ ...prev, saveYoutube: false }));
+    setYoutubeUploadProgress(null);
+  };
+
+  const doSignInYoutube = async () => {
+    console.log("[RightPanel] doSignInYoutube: sending sign-in-youtube message");
+    const result = await chrome.runtime.sendMessage({ type: "sign-in-youtube" });
+    console.log("[RightPanel] doSignInYoutube: result =", JSON.stringify(result));
+    if (result?.status === "ok") {
+      console.log("[RightPanel] doSignInYoutube: sign-in OK, setting youtubeEnabled");
+      setContentState((prev) => ({ ...prev, youtubeEnabled: true }));
+    } else {
+      console.error("[RightPanel] doSignInYoutube: sign-in failed:", result?.error);
+      showEditorToast(contentStateRef.current, result?.error || "YouTube sign-in failed");
+    }
+  };
+
+  const signOutYoutube = () => {
+    console.log("[RightPanel] signOutYoutube: signing out");
+    chrome.runtime.sendMessage({ type: "sign-out-youtube" });
+    showEditorToast(contentStateRef.current, "Signed out of YouTube");
+    setYoutubeStatus(null);
+    setContentState((prev) => ({ ...prev, youtubeEnabled: false }));
   };
 
   const handleEdit = () => {
@@ -465,7 +607,69 @@ const RightPanel = () => {
     <div className={styles.panel}>
       {contentState.mode === "audio" && <AudioUI />}
       {contentState.mode === "crop" && <CropUI />}
-      {contentState.mode === "player" && (
+      {settingsView === "s3" && (
+        <div>
+          <S3Settings
+            onClose={() => setSettingsView(null)}
+            onSave={() => setSettingsView(null)}
+          />
+        </div>
+      )}
+      {settingsView === "youtube" && (
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", padding: "0 8px" }}>
+            <div style={{ fontSize: "15px", fontWeight: 700 }}>YouTube Account</div>
+            <div
+              role="button"
+              onClick={() => setSettingsView(null)}
+              style={{ cursor: "pointer", fontSize: "13px", color: "#888" }}
+            >
+              Back
+            </div>
+          </div>
+          {youtubeStatus === "signed-in" || contentState.youtubeEnabled ? (
+            <div style={{ padding: "8px", fontSize: "13px", color: "#155724", backgroundColor: "#d4edda", borderRadius: "6px", marginBottom: "12px" }}>
+              Signed in to YouTube
+            </div>
+          ) : (
+            <div>
+              <div style={{ padding: "8px", fontSize: "13px", color: "#856404", backgroundColor: "#fff3cd", borderRadius: "6px", marginBottom: "12px" }}>
+                Not signed in to YouTube.
+              </div>
+              <div
+                role="button"
+                className={styles.button}
+                onClick={() => doSignInYoutube()}
+              >
+                <div className={styles.buttonMiddle}>
+                  <div className={styles.buttonTitle}>Sign in to YouTube</div>
+                  <div className={styles.buttonDescription}>
+                    Authorize Screenity to upload videos
+                  </div>
+                </div>
+                <div className={styles.buttonRight}>
+                  <ReactSVG src={URL + "editor/icons/right-arrow.svg"} />
+                </div>
+              </div>
+            </div>
+          )}
+          {contentState.youtubeEnabled && (
+            <div
+              role="button"
+              className={styles.button}
+              onClick={() => { signOutYoutube(); setSettingsView(null); }}
+            >
+              <div className={styles.buttonMiddle}>
+                <div className={styles.buttonTitle}>Sign out of YouTube</div>
+              </div>
+              <div className={styles.buttonRight}>
+                <ReactSVG src={URL + "editor/icons/right-arrow.svg"} />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {settingsView === null && contentState.mode === "player" && (
         <div>
           {!contentState.fallback && contentState.offline && (
             <div className={styles.alert}>
@@ -903,6 +1107,163 @@ const RightPanel = () => {
                   <ReactSVG src={URL + "editor/icons/right-arrow.svg"} />
                 </div>
               </div>
+              <div
+                role="button"
+                className={styles.button}
+                onClick={saveToS3}
+                disabled={contentState.saveS3}
+                aria-disabled={contentState.saveS3}
+              >
+                <div className={styles.buttonLeft}>
+                  <ReactSVG src={URL + "editor/icons/upload.svg"} />
+                </div>
+                <div className={styles.buttonMiddle}>
+                  <div className={styles.buttonTitle}>
+                    {contentState.saveS3 ? "Saving to S3\u2026" : "Save to S3"}
+                  </div>
+                  <div className={styles.buttonDescription}>
+                    Upload to your S3 bucket
+                  </div>
+                </div>
+                <div className={styles.buttonRight}>
+                  <ReactSVG src={URL + "editor/icons/right-arrow.svg"} />
+                </div>
+              </div>
+              <div
+                role="button"
+                className={styles.button}
+                onClick={() => { setSettingsView(settingsView === "s3" ? null : "s3"); }}
+              >
+                <div className={styles.buttonMiddle}>
+                  <div className={styles.buttonTitle}>
+                    S3 Settings
+                  </div>
+                  <div className={styles.buttonDescription}>
+                    Configure your S3 storage
+                  </div>
+                </div>
+                <div className={styles.buttonRight}>
+                  <ReactSVG src={URL + "editor/icons/right-arrow.svg"} />
+                </div>
+              </div>
+              <div
+                role="button"
+                className={styles.button}
+                onClick={saveToYoutube}
+                disabled={contentState.saveYoutube}
+                aria-disabled={contentState.saveYoutube}
+                style={{ position: "relative", overflow: "hidden" }}
+              >
+                {youtubeUploadProgress !== null && contentState.saveYoutube && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      top: 0,
+                      height: "100%",
+                      width: `${youtubeUploadProgress}%`,
+                      backgroundColor: "rgba(56, 126, 247, 0.12)",
+                      transition: "width 0.3s ease",
+                      pointerEvents: "none",
+                    }}
+                  />
+                )}
+                <div className={styles.buttonLeft}>
+                  <ReactSVG src={URL + "editor/icons/youtube.svg"} />
+                </div>
+                <div className={styles.buttonMiddle}>
+                  <div className={styles.buttonTitle}>
+                    {contentState.saveYoutube
+                      ? `Uploading to YouTube\u2026 ${youtubeUploadProgress ?? 0}%`
+                      : "Upload to YouTube"}
+                  </div>
+                  <div className={styles.buttonDescription}>
+                    {contentState.youtubeEnabled ? "Upload as unlisted video" : "Sign in & upload as unlisted"}
+                  </div>
+                </div>
+                <div className={styles.buttonRight}>
+                  <ReactSVG src={URL + "editor/icons/right-arrow.svg"} />
+                </div>
+              </div>
+              {youtubeUploadResult && (
+                <div
+                  style={{
+                    padding: "12px",
+                    backgroundColor: "#d4edda",
+                    border: "1px solid #c3e6cb",
+                    borderRadius: "6px",
+                    marginTop: "8px",
+                    fontSize: "13px",
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: "8px", color: "#155724" }}>
+                    Uploaded to YouTube
+                  </div>
+                  <div style={{ marginBottom: "8px", wordBreak: "break-all" }}>
+                    <a href={youtubeUploadResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "#155724" }}>
+                      {youtubeUploadResult.url}
+                    </a>
+                  </div>
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    <div
+                      role="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(youtubeUploadResult.url);
+                        showEditorToast(contentStateRef.current, "Link copied");
+                      }}
+                      style={{
+                        padding: "6px 12px",
+                        backgroundColor: "#155724",
+                        color: "#fff",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                      }}
+                    >
+                      Copy link
+                    </div>
+                    <div
+                      role="button"
+                      onClick={() => window.open(youtubeUploadResult.url, "_blank")}
+                      style={{
+                        padding: "6px 12px",
+                        backgroundColor: "#155724",
+                        color: "#fff",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                      }}
+                    >
+                      Open in YouTube
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div
+                role="button"
+                className={styles.button}
+                onClick={() => { setSettingsView(settingsView === "youtube" ? null : "youtube"); }}
+              >
+                <div className={styles.buttonMiddle}>
+                  <div className={styles.buttonTitle}>
+                    YouTube Account
+                  </div>
+                  <div className={styles.buttonDescription}>
+                    {contentState.youtubeEnabled ? "Signed in" : "Not signed in"}
+                  </div>
+                </div>
+                <div className={styles.buttonRight}>
+                  <ReactSVG src={URL + "editor/icons/right-arrow.svg"} />
+                </div>
+              </div>
+              {contentState.youtubeEnabled && (
+                <div
+                  className={styles.buttonLogout}
+                  onClick={() => { signOutYoutube(); }}
+                >
+                  Sign out of YouTube
+                </div>
+              )}
             </div>
           </div>
           <div className={styles.section}>

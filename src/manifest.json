@@ -57,9 +57,10 @@
     }
   ],
   "oauth2": {
-    "client_id": "560517327251-m7n1k3kddknu7s9s4ejvrs1bj91gutd7.apps.googleusercontent.com",
+    "client_id": "353166898892-3cp8gsm4pvgioevhcg5fsqmr329fhhua.apps.googleusercontent.com",
     "scopes": [
-      "https://www.googleapis.com/auth/drive.file"
+      "https://www.googleapis.com/auth/drive.file",
+      "https://www.googleapis.com/auth/youtube.upload"
     ]
   },
   "content_security_policy": {

@@ -20,6 +20,8 @@ import { chunksStore } from "../recording/chunkHandler";
 import { openExistingChunksStore } from "../../CloudRecorder/recorderStorage/chooseChunksStore";
 import { destroySessionDir } from "../../CloudRecorder/recorderStorage/opfsKvStore";
 import { handleSaveToDrive } from "../drive/handleSaveToDrive";
+import { handleSaveToS3 } from "../s3/handleSaveToS3";
+import { handleSaveToYoutube, signOutYoutube, checkYoutubeAuth, handleSignInYoutube } from "../youtube/handleSaveToYoutube";
 import { addAlarmListener } from "../alarms/addAlarmListener";
 import { cancelRecording, handleDismiss } from "../recording/cancelRecording";
 import { handleDismissRecordingTab } from "../recording/discardRecording";
@@ -1768,6 +1770,64 @@ export const setupHandlers = () => {
   registerMessage(
     "save-to-drive-fallback",
     async (message) => await handleSaveToDrive(message, true),
+  );
+  registerMessage(
+    "save-to-s3",
+    async (message) => await handleSaveToS3(message),
+  );
+  registerMessage(
+    "save-to-s3-config",
+    async (message) => {
+      await chrome.storage.local.set({
+        s3Endpoint: message.endpoint,
+        s3Region: message.region,
+        s3Bucket: message.bucket,
+        s3AccessKeyId: message.accessKeyId,
+        s3SecretAccessKey: message.secretAccessKey,
+        s3PathPrefix: message.pathPrefix || "",
+      });
+      return { status: "ok" };
+    },
+  );
+  registerMessage(
+    "get-s3-config",
+    async () => {
+      const result = await new Promise((resolve) =>
+        chrome.storage.local.get(
+          ["s3Endpoint", "s3Region", "s3Bucket", "s3AccessKeyId", "s3SecretAccessKey", "s3PathPrefix"],
+          resolve,
+        ),
+      );
+      return result;
+    },
+  );
+  registerMessage(
+    "clear-s3-config",
+    async () => {
+      await chrome.storage.local.remove(
+        ["s3Endpoint", "s3Region", "s3Bucket", "s3AccessKeyId", "s3SecretAccessKey", "s3PathPrefix"],
+      );
+      return { status: "ok" };
+    },
+  );
+  registerMessage(
+    "save-to-youtube",
+    async (message, sender) => await handleSaveToYoutube(message, sender),
+  );
+  registerMessage(
+    "check-youtube-auth",
+    async () => await checkYoutubeAuth(),
+  );
+  registerMessage(
+    "sign-in-youtube",
+    async () => await handleSignInYoutube(),
+  );
+  registerMessage(
+    "sign-out-youtube",
+    async () => {
+      await signOutYoutube();
+      return { status: "ok" };
+    },
   );
   registerMessage("request-download", (message) =>
     requestDownload(message.base64, message.title),
