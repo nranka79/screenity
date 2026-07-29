@@ -1,7 +1,12 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
+import { debug, debugWarn, debugError, initDebugMode, watchDebugMode } from "../utils/debugLog";
 
 const Recorder = () => {
   useEffect(() => {
+    initDebugMode();
+    watchDebugMode();
+    debug('Permissions iframe mounted, inited debug mode');
+
     window.parent.postMessage(
       {
         type: "screenity-permissions-loaded",
@@ -15,6 +20,7 @@ const Recorder = () => {
     try {
       const pp = document.permissionsPolicy || document.featurePolicy;
       if (pp && typeof pp.allowsFeature === "function") {
+        debug('Permissions policy:', { camera: pp.allowsFeature("camera"), microphone: pp.allowsFeature("microphone"), display: pp.allowsFeature("display-capture") });
         window.parent.postMessage(
           {
             type: "screenity-site-policy",
@@ -45,7 +51,7 @@ const Recorder = () => {
   }, []);
 
   const checkPermissions = async () => {
-    // Individually check the camera and microphone permissions using the Permissions API. Then enumerate devices respectively.
+    debug('checkPermissions() called');
     try {
       const cameraPermission = await navigator.permissions.query({
         name: "camera",
@@ -53,76 +59,92 @@ const Recorder = () => {
       const microphonePermission = await navigator.permissions.query({
         name: "microphone",
       });
+      debug('Permissions.query results:', { camera: cameraPermission.state, microphone: microphonePermission.state });
 
       cameraPermission.onchange = () => {
+        debug('Camera permission changed, rechecking');
         checkPermissions();
       };
 
       microphonePermission.onchange = () => {
+        debug('Microphone permission changed, rechecking');
         checkPermissions();
       };
 
-      // If `Permissions.query()` reports either granted, take the fast
-      // path and enumerate.
-      if (
-        cameraPermission.state === "granted" ||
-        microphonePermission.state === "granted"
-      ) {
-        enumerateDevices(
-          cameraPermission.state === "granted",
-          microphonePermission.state === "granted"
-        );
+      const camGranted = cameraPermission.state === "granted";
+      const micGranted = microphonePermission.state === "granted";
+
+      if (camGranted || micGranted) {
+        debug('Fast path - at least one granted, probe individually');
+        await probeAndEnumerate(camGranted, micGranted);
         return;
       }
 
-      // permissions.query() asks the iframe's own origin and reports
-      // "prompt"/"denied" even when getUserMedia would succeed via
-      // the parent's `allow="camera *; microphone *"`. Probe directly.
+      debug('Neither granted via Permissions API, probing getUserMedia individually');
+      let micOk = false;
+      let camOk = false;
+
       try {
-        const probeStream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: true,
-        });
-        // It worked; clean up the probe tracks immediately. The
-        // subsequent enumerateDevices() call will request its own
-        // stream when it actually needs the data; this probe was just
-        // a permission test.
-        probeStream.getTracks().forEach((t) => t.stop());
-        enumerateDevices(true, true);
-        return;
-      } catch (probeErr) {
-        // Real permission failure (NotAllowedError, NotFoundError if
-        // no devices, NotReadableError if device in use). Surface
-        // the modal.
+        const audioProbe = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioProbe.getTracks().forEach((t) => t.stop());
+        micOk = true;
+        debug('Audio probe succeeded');
+      } catch (audioErr) {
+        debugWarn('Audio probe failed:', audioErr.name);
+      }
+
+      try {
+        const videoProbe = await navigator.mediaDevices.getUserMedia({ video: true });
+        videoProbe.getTracks().forEach((t) => t.stop());
+        camOk = true;
+        debug('Video probe succeeded');
+      } catch (videoErr) {
+        debugWarn('Video probe failed:', videoErr.name);
+      }
+
+      if (micOk || camOk) {
+        debug('Probe results - mic:', micOk, 'camera:', camOk);
+        await probeAndEnumerate(camOk, micOk);
+      } else {
+        debugError('No media devices available after individual probe');
         window.parent.postMessage(
           {
             type: "screenity-permissions",
             success: false,
-            error: probeErr?.name || "unknown",
+            error: "No media devices available",
           },
           "*"
         );
       }
     } catch (err) {
-      enumerateDevices();
+      debugWarn('Permissions.query threw, falling back to enumerate:', err);
+      await probeAndEnumerate(false, false);
     }
   };
 
-  const enumerateDevices = async (camGranted = true, micGranted = true) => {
+  const probeAndEnumerate = async (camGranted, micGranted) => {
+    debug('probeAndEnumerate:', { camera: camGranted, microphone: micGranted });
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: micGranted,
-        video: camGranted,
-      });
+      const constraints = {};
+      if (micGranted) constraints.audio = true;
+      if (camGranted) constraints.video = true;
+
+      let stream = null;
+      if (Object.keys(constraints).length > 0) {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        debug('getUserMedia for enumeration succeeded');
+      } else {
+        debug('No constraints for getUserMedia, skipping stream request');
+      }
 
       const devicesInfo = await navigator.mediaDevices.enumerateDevices();
+      debug('Enumerated', devicesInfo.length, 'devices:', devicesInfo.map(d => d.kind + ':' + d.label));
 
       let audioinput = [];
       let audiooutput = [];
       let videoinput = [];
 
       if (micGranted) {
-        // Filter by audio input
         audioinput = devicesInfo
           .filter((device) => device.kind === "audioinput")
           .map((device) => ({
@@ -130,7 +152,6 @@ const Recorder = () => {
             label: device.label,
           }));
 
-        // Filter by audio output and extract relevant properties
         audiooutput = devicesInfo
           .filter((device) => device.kind === "audiooutput")
           .map((device) => ({
@@ -140,7 +161,6 @@ const Recorder = () => {
       }
 
       if (camGranted) {
-        // Filter by video input and extract relevant properties
         videoinput = devicesInfo
           .filter((device) => device.kind === "videoinput")
           .map((device) => ({
@@ -149,9 +169,9 @@ const Recorder = () => {
           }));
       }
 
-      // Save in Chrome local storage
+      debug('Filtered devices - audioinput:', audioinput.length, 'videoinput:', videoinput.length);
+
       chrome.storage.local.set({
-        // Set available devices
         audioinput: audioinput,
         audiooutput: audiooutput,
         videoinput: videoinput,
@@ -159,7 +179,6 @@ const Recorder = () => {
         microphonePermission: micGranted,
       });
 
-      // Post message to parent window
       window.parent.postMessage(
         {
           type: "screenity-permissions",
@@ -173,14 +192,13 @@ const Recorder = () => {
         "*"
       );
 
-      //sendResponse({ success: true, audioinput, audiooutput, videoinput });
-
-      // End the stream
-      stream.getTracks().forEach(function (track) {
-        track.stop();
-      });
+      if (stream) {
+        stream.getTracks().forEach(function (track) {
+          track.stop();
+        });
+      }
     } catch (err) {
-      // Post message to parent window
+      debugError('EnumerateDevices failed:', err.name, err.message);
       window.parent.postMessage(
         {
           type: "screenity-permissions",
@@ -189,9 +207,10 @@ const Recorder = () => {
         },
         "*"
       );
-      //sendResponse({ success: false, error: err.name });
     }
   };
+
+
 
   const onMessage = (message) => {
     if (message.type === "screenity-get-permissions") {

@@ -877,6 +877,21 @@ const SettingsMenu = (props) => {
           >
             Change destination
           </DropdownMenu.Item>
+          <DropdownMenu.Separator className="DropdownMenuSeparator" />
+          <DropdownMenu.CheckboxItem
+            className="DropdownMenuItem"
+            onSelect={(e) => e.preventDefault()}
+            onCheckedChange={(checked) => {
+              setContentState((prev) => ({ ...prev, debugMode: checked }));
+              chrome.storage.local.set({ debugMode: checked });
+            }}
+            checked={contentState.debugMode}
+          >
+            Debug mode
+            <DropdownMenu.ItemIndicator className="ItemIndicator">
+              <img src={CheckWhiteIcon} />
+            </DropdownMenu.ItemIndicator>
+          </DropdownMenu.CheckboxItem>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

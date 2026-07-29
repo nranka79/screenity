@@ -24,6 +24,7 @@ import {
   setStartFlowOutcome,
 } from "../../utils/startFlowTrace";
 import { triggerSupportDownload } from "../../utils/triggerSupportDownload";
+import { debug, debugWarn, debugError, initDebugMode, watchDebugMode } from "../../utils/debugLog";
 
 export const contentStateContext = createContext();
 export const contentStateRef = { current: null };
@@ -50,6 +51,10 @@ const deriveCursorMode = (effects, fallbackMode) => {
 const ENABLE_TAB_SCOPED_UI = true;
 
 const ContentState = (props) => {
+  initDebugMode();
+  watchDebugMode();
+  debug('ContentState mounted');
+
   const [timer, setTimerInternal] = React.useState(0);
   const CLOUD_FEATURES_ENABLED =
     process.env.SCREENITY_ENABLE_CLOUD_FEATURES === "true";
@@ -579,13 +584,20 @@ const ContentState = (props) => {
   }, []);
 
   const startStreaming = useCallback(async () => {
-    // Double-click guard: a previous start may still be in flight.
+    debug('startStreaming called, current state:', {
+      recordingType: contentStateRef.current?.recordingType,
+      cameraPermission: contentStateRef.current?.cameraPermission,
+      microphonePermission: contentStateRef.current?.microphonePermission,
+      micActive: contentStateRef.current?.micActive,
+      cameraActive: contentStateRef.current?.cameraActive,
+    });
     const snap = await chrome.storage.local.get([
       "pendingRecording",
       "recording",
       "restarting",
     ]);
     if (snap.pendingRecording || snap.recording || snap.restarting) {
+      debug('startStreaming blocked: pending/recording/restarting in flight');
       return;
     }
 
@@ -955,6 +967,7 @@ const ContentState = (props) => {
   }, [contentStateRef]);
 
   const handleDevicePermissions = (data) => {
+    debug('handleDevicePermissions:', { success: data?.success, cameraPermission: data?.cameraPermission, microphonePermission: data?.microphonePermission, audioInputCount: data?.audioinput?.length, videoInputCount: data?.videoinput?.length });
     if (data && data != undefined && data.success) {
       const audioInput = data.audioinput;
       const videoInput = data.videoinput;
@@ -1007,33 +1020,33 @@ const ContentState = (props) => {
         id: contentStateRef.current.defaultVideoInput,
       });
 
+      if (audioInput.length > 0) {
+        setContentState((prevContentState) => ({
+          ...prevContentState,
+          defaultAudioInput: prevContentState.defaultAudioInput !== "none" ? prevContentState.defaultAudioInput : audioInput[0].deviceId,
+          defaultAudioInputLabel: audioInput[0].label || "",
+          micActive: true,
+        }));
+        chrome.storage.local.set({
+          defaultAudioInput: contentStateRef.current.defaultAudioInput !== "none" ? contentStateRef.current.defaultAudioInput : audioInput[0].deviceId,
+          defaultAudioInputLabel: audioInput[0].label || "",
+          micActive: true,
+        });
+      }
+      if (videoInput.length > 0) {
+        setContentState((prevContentState) => ({
+          ...prevContentState,
+          defaultVideoInput: prevContentState.defaultVideoInput !== "none" ? prevContentState.defaultVideoInput : videoInput[0].deviceId,
+          defaultVideoInputLabel: videoInput[0].label || "",
+          cameraActive: true,
+        }));
+        chrome.storage.local.set({
+          defaultVideoInput: contentStateRef.current.defaultVideoInput !== "none" ? contentStateRef.current.defaultVideoInput : videoInput[0].deviceId,
+          defaultVideoInputLabel: videoInput[0].label || "",
+          cameraActive: true,
+        });
+      }
       if (!contentStateRef.current.setDevices) {
-        if (audioInput.length > 0) {
-          setContentState((prevContentState) => ({
-            ...prevContentState,
-            defaultAudioInput: audioInput[0].deviceId,
-            defaultAudioInputLabel: audioInput[0].label || "",
-            micActive: true,
-          }));
-          chrome.storage.local.set({
-            defaultAudioInput: audioInput[0].deviceId,
-            defaultAudioInputLabel: audioInput[0].label || "",
-            micActive: true,
-          });
-        }
-        if (videoInput.length > 0) {
-          setContentState((prevContentState) => ({
-            ...prevContentState,
-            defaultVideoInput: videoInput[0].deviceId,
-            defaultVideoInputLabel: videoInput[0].label || "",
-            cameraActive: true,
-          }));
-          chrome.storage.local.set({
-            defaultVideoInput: videoInput[0].deviceId,
-            defaultVideoInputLabel: videoInput[0].label || "",
-            cameraActive: true,
-          });
-        }
         if (audioInput.length > 0 || videoInput.length > 0) {
           setContentState((prevContentState) => ({
             ...prevContentState,
@@ -1045,6 +1058,7 @@ const ContentState = (props) => {
         }
       }
     } else {
+      debugWarn('Permission check failed:', data?.error || 'unknown error');
       setContentState((prevContentState) => ({
         ...prevContentState,
         cameraPermission: false,
@@ -1259,6 +1273,7 @@ const ContentState = (props) => {
     hideUIAlerts: false,
     toolbarHover: false,
     hideUI: false,
+    debugMode: false,
     bigTab: "record",
     askDismiss: true,
     quality: "max",
