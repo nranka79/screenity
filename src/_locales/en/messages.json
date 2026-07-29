@@ -1,10 +1,10 @@
 {
   "extName": {
-    "message": "Screenity - Screen Recorder & Annotation Tool",
+    "message": "NDR-Screenity - Screen Recorder & Annotation Tool",
     "description": "Extension name"
   },
   "extDesc": {
-    "message": "The free and privacy-friendly screen recorder for everyone. Capture, annotate, edit videos and more - all with no sign in needed.",
+    "message": "NDR-Screenity - The free and privacy-friendly screen recorder for everyone. Capture, annotate, edit videos and more - all with no sign in needed.",
     "description": "Extension description"
   },
   "recordTab": {
@@ -1234,7 +1234,7 @@
     "description": "Button label to go to the dashboard in the popup"
   },
   "welcomePopupTitle": {
-    "message": "Welcome to Screenity",
+    "message": "Welcome to NDR-Screenity",
     "description": "Title for the welcome popup shown to new users"
   },
   "welcomePopupDescriptionTop": {

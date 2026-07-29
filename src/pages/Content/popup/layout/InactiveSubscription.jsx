@@ -66,10 +66,10 @@ const InactiveSubscription = ({
           {formattedDate && hasSubscribedBefore && (
             <div
               style={{
-                backgroundColor: "#FFF8FA",
+                backgroundColor: "#FEF7E6",
                 borderRadius: "30px",
                 padding: "1.25rem 1.5rem",
-                color: "#F0175B",
+                color: "#c98e00",
                 fontSize: "14px",
                 fontWeight: 500,
                 lineHeight: "1.5",
@@ -133,16 +133,15 @@ const InactiveSubscription = ({
           <div
             className="welcome-cta"
             style={{
-              backgroundColor: "white",
-              border: "1px solid #E5E7EB",
+              backgroundColor: "#f7b519",
               boxSizing: "border-box",
+              color: "#231f20",
               height: "45px",
               width: "100%",
               borderRadius: "999px",
               textAlign: "center",
-              fontWeight: "600",
+              fontWeight: "700",
               cursor: "pointer",
-              color: "#141416",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",

@@ -26,6 +26,7 @@ import {
 
 import RecordingTab from "./layout/RecordingTab";
 import VideosTab from "./layout/VideosTab";
+import DestinationPicker from "./layout/DestinationPicker";
 
 import SettingsMenu from "./layout/SettingsMenu";
 import InactiveSubscription from "./layout/InactiveSubscription";
@@ -58,9 +59,15 @@ const PopupContainer = (props) => {
   const [URL, setURL] = useState("https://help.screenity.io/");
   const isCloudBuild = process.env.SCREENITY_ENABLE_CLOUD_FEATURES === "true";
   const wasCameraActiveRef = useRef(null);
+  const [showDestinationPicker, setShowDestinationPicker] = useState(null);
 
   useEffect(() => {
-    chrome.storage.local.get(["onboarding", "showProSplash"], (result) => {
+    chrome.storage.local.get(["destination", "onboarding", "showProSplash"], (result) => {
+      if (!result.destination || result.destination === "local") {
+        setShowDestinationPicker(!result.destination);
+      } else {
+        setShowDestinationPicker(false);
+      }
       const nextOnboarding = Boolean(result.onboarding);
       const nextShowProSplash = Boolean(result.showProSplash);
       setOnboarding(nextOnboarding);
@@ -528,7 +535,7 @@ const PopupContainer = (props) => {
                       : "100%",
                   filter:
                     tab === "record" && !contentState.isLoggedIn
-                      ? "drop-shadow(rgba(86, 123, 218, 0.35) 0px 4px 11px) drop-shadow(rgba(53, 87, 98, 0.2) 0px 4px 10px)"
+                      ? "drop-shadow(rgba(247, 181, 25, 0.35) 0px 4px 11px) drop-shadow(rgba(62, 62, 61, 0.2) 0px 4px 10px)"
                       : "none",
                   userSelect: "none",
                   pointerEvents: "none",
@@ -597,91 +604,77 @@ const PopupContainer = (props) => {
                   );
                 }}
               />
-            ) : isCloudBuild &&
-              !contentState.isLoggedIn &&
-              contentState.wasLoggedIn ? (
-              <LoggedOut
-                onManageClick={() => {
-                  chrome.runtime.sendMessage({ type: "handle-login" });
-                }}
-                onDowngradeClick={() => {
-                  chrome.storage.local.set({
-                    wasLoggedIn: false,
-                    stayLoggedOut: true,
-                  });
-                  setContentState((prev) => ({
-                    ...prev,
-                    isLoggedIn: false,
-                    wasLoggedIn: false,
-                    bigTab: "record",
-                  }));
-                  setTab("record");
-
-                  requestAnimationFrame(() => {
-                    if (recordTabRef.current && pillRef.current) {
-                      const tabRef = recordTabRef.current;
-                      pillRef.current.style.left = `${tabRef.offsetLeft}px`;
-                      pillRef.current.style.width = `${
-                        tabRef.getBoundingClientRect().width
-                      }px`;
-                    }
-                  });
-                }}
-              />
-            ) : (
-              <Tabs.Root
-                className="TabsRoot tl"
-                value={tab}
-                onValueChange={onValueChange}
-              >
-                <Tabs.List
-                  className="TabsList tl"
-                  data-value={tab}
-                  aria-label="Manage your account"
-                  tabIndex={0}
-                >
-                  <div className="pill-anim" ref={pillRef}></div>
-                  <Tabs.Trigger
-                    className="TabsTrigger tl"
-                    value="record"
-                    ref={recordTabRef}
-                    tabIndex={0}
+            ) : null}
+            {(() => {
+              const showDest = showDestinationPicker === true || contentState.showDestinationPicker;
+              if (showDest) {
+                return (
+                  <DestinationPicker
+                    onComplete={(dest) => {
+                      setShowDestinationPicker(false);
+                      setContentState((prev) => ({ ...prev, destination: dest, showDestinationPicker: false }));
+                    }}
+                  />
+                );
+              }
+              if (showDestinationPicker === false) {
+                return (
+                  <Tabs.Root
+                    className="TabsRoot tl"
+                    value={tab}
+                    onValueChange={onValueChange}
                   >
-                    <div className="TabsTriggerIcon">
-                      <img
-                        src={
-                          tab === "record" ? RecordTabActive : RecordTabInactive
-                        }
-                      />
-                    </div>
-                    {chrome.i18n.getMessage("recordTab")}
-                  </Tabs.Trigger>
-                  <Tabs.Trigger
-                    className="TabsTrigger tl"
-                    value="dashboard"
-                    ref={videoTabRef}
-                    tabIndex={0}
-                  >
-                    <div className="TabsTriggerIcon">
-                      <img
-                        src={
-                          tab === "dashboard"
-                            ? VideoTabActive
-                            : VideoTabInactive
-                        }
-                      />
-                    </div>
-                    {chrome.i18n.getMessage("videosTab")}
-                  </Tabs.Trigger>
-                </Tabs.List>
-                <Tabs.Content className="TabsContent tl" value="record">
-                  <RecordingTab shadowRef={props.shadowRef} />
-                </Tabs.Content>
-                <Tabs.Content className="TabsContent tl" value="dashboard">
-                  <VideosTab shadowRef={props.shadowRef} />
-                </Tabs.Content>
-              </Tabs.Root>
-            )}
+                    <Tabs.List
+                      className="TabsList tl"
+                      data-value={tab}
+                      aria-label="Manage your account"
+                      tabIndex={0}
+                    >
+                      <div className="pill-anim" ref={pillRef}></div>
+                      <Tabs.Trigger
+                        className="TabsTrigger tl"
+                        value="record"
+                        ref={recordTabRef}
+                        tabIndex={0}
+                      >
+                        <div className="TabsTriggerIcon">
+                          <img
+                            src={
+                              tab === "record" ? RecordTabActive : RecordTabInactive
+                            }
+                          />
+                        </div>
+                        {chrome.i18n.getMessage("recordTab")}
+                      </Tabs.Trigger>
+                      <Tabs.Trigger
+                        className="TabsTrigger tl"
+                        value="dashboard"
+                        ref={videoTabRef}
+                        tabIndex={0}
+                      >
+                        <div className="TabsTriggerIcon">
+                          <img
+                            src={
+                              tab === "dashboard"
+                                ? VideoTabActive
+                                : VideoTabInactive
+                            }
+                          />
+                        </div>
+                        {chrome.i18n.getMessage("videosTab")}
+                      </Tabs.Trigger>
+                    </Tabs.List>
+                    <Tabs.Content className="TabsContent tl" value="record">
+                      <RecordingTab shadowRef={props.shadowRef} />
+                    </Tabs.Content>
+                    <Tabs.Content className="TabsContent tl" value="dashboard">
+                      <VideosTab shadowRef={props.shadowRef} />
+                    </Tabs.Content>
+                  </Tabs.Root>
+                );
+              }
+              return null;
+            })()}
           </div>
           {contentState.settingsOpen && (
             <div

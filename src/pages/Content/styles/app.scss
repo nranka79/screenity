@@ -60,7 +60,7 @@
   border-radius: 15px;
   z-index: 99999;
   font-family: "Satoshi-Medium", sans-serif;
-  color: #29292f;
+  color: #231f20;
   box-shadow: 0px 10px 38px -10px rgba(22, 23, 24, 0.35),
     0px 10px 20px -15px rgba(22, 23, 24, 0.2);
   animation-duration: 400ms;
@@ -84,7 +84,7 @@
   right: 12px;
   width: 18px;
   height: 18px;
-  background: #3080f8;
+  background: #f7b519;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
@@ -143,7 +143,7 @@
     margin-bottom: 18px !important;
 
     a {
-      color: #3b82f6 !important;
+      color: #f7b519 !important;
       font-family: $font-bold !important;
       text-decoration: none !important;
     }
@@ -220,7 +220,7 @@
       .driver-popover-prev-btn,
       .driver-popover-close-btn {
         background-color: $color-primary !important;
-        color: white !important;
+        color: #231f20 !important;
         border: none !important;
         padding: 10px 14px !important;
         border-radius: 30px !important;

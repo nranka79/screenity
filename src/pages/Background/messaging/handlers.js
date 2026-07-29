@@ -20,8 +20,10 @@ import { chunksStore } from "../recording/chunkHandler";
 import { openExistingChunksStore } from "../../CloudRecorder/recorderStorage/chooseChunksStore";
 import { destroySessionDir } from "../../CloudRecorder/recorderStorage/opfsKvStore";
 import { handleSaveToDrive } from "../drive/handleSaveToDrive";
+import { uploadChunksFromStore } from "../upload/StreamUploadManager";
 import { handleSaveToS3 } from "../s3/handleSaveToS3";
 import { handleSaveToYoutube, signOutYoutube, checkYoutubeAuth, handleSignInYoutube } from "../youtube/handleSaveToYoutube";
+import signIn from "../modules/signIn";
 import { addAlarmListener } from "../alarms/addAlarmListener";
 import { cancelRecording, handleDismiss } from "../recording/cancelRecording";
 import { handleDismissRecordingTab } from "../recording/discardRecording";
@@ -1407,9 +1409,17 @@ export const setupHandlers = () => {
       .catch((err) => {
         console.error("Failed to handle stop-recording-tab", err);
       })
-      .finally(() => {
+      .finally(async () => {
         stopRecordingTabInFlight = false;
         stopRecordingTabLastAt = Date.now();
+        try {
+          const { destination } = await chrome.storage.local.get(["destination"]);
+          if (destination && destination !== "local") {
+            setTimeout(() => {
+              chrome.runtime.sendMessage({ type: "trigger-auto-upload" }).catch(() => {});
+            }, 3000);
+          }
+        } catch {}
       });
     sendResponse({ ok: true });
     return true;
@@ -1823,6 +1833,22 @@ export const setupHandlers = () => {
     async () => await handleSignInYoutube(),
   );
   registerMessage(
+    "sign-in-for-destination",
+    async (message) => {
+      try {
+        const scope = message?.scope || undefined;
+        const token = await signIn(scope);
+        if (!token) {
+          return { status: "error", error: "Sign-in returned no token" };
+        }
+        return { status: "ok" };
+      } catch (err) {
+        console.error("[Destination] sign-in failed:", err.message);
+        return { status: "error", error: err.message };
+      }
+    },
+  );
+  registerMessage(
     "sign-out-youtube",
     async () => {
       await signOutYoutube();
@@ -1886,6 +1912,77 @@ export const setupHandlers = () => {
       return true;
     },
   );
+  registerMessage("trigger-auto-upload", async () => {
+    try {
+      const { destination, lastRecordingBackendRef } = await chrome.storage.local.get([
+        "destination", "lastRecordingBackendRef",
+      ]);
+      if (!destination || destination === "local") {
+        return { status: "skipped", reason: "no-destination" };
+      }
+      const fileName = `NDR-Screenity Recording ${new Date().toISOString().slice(0, 10)}`;
+
+      let store;
+      const backend = lastRecordingBackendRef?.backend || "idb";
+      const sessionId = lastRecordingBackendRef?.sessionId || null;
+      if (backend === "opfs" && sessionId) {
+        const { store: opfsStore } = openExistingChunksStore({
+          sessionId,
+          track: "screen",
+          backend: "opfs",
+        });
+        store = opfsStore;
+      } else {
+        store = chunksStore;
+      }
+
+      const result = await uploadChunksFromStore(store, destination, fileName);
+
+      if (result.status === "ok") {
+        let url = "";
+        if (destination === "drive") {
+          url = `https://drive.google.com/file/d/${result.url}/view`;
+        } else if (destination === "youtube") {
+          url = result.url || (result.videoId ? `https://youtu.be/${result.videoId}` : "");
+        } else {
+          url = result.url || "";
+        }
+
+        const { activeTab } = await chrome.storage.local.get(["activeTab"]);
+        const message = url
+          ? `✅ Uploaded to ${destination}: ${url}`
+          : `✅ Uploaded to ${destination}`;
+
+        if (activeTab) {
+          const { sendMessageTab } = await import("../tabManagement");
+          await sendMessageTab(activeTab, {
+            type: "show-toast",
+            message,
+            timeout: 15000,
+          }).catch(() => {});
+        }
+
+        if (url) {
+          copyToClipboard(url);
+        }
+      } else if (result.status === "error") {
+        const { activeTab } = await chrome.storage.local.get(["activeTab"]);
+        if (activeTab) {
+          const { sendMessageTab } = await import("../tabManagement");
+          await sendMessageTab(activeTab, {
+            type: "show-toast",
+            message: `❌ Upload to ${destination} failed: ${result.error || result.reason || "Unknown error"}`,
+            timeout: 10000,
+          }).catch(() => {});
+        }
+      }
+
+      return result;
+    } catch (err) {
+      console.error("[AutoUpload] trigger failed:", err);
+      return { status: "error", error: err.message };
+    }
+  });
   registerMessage("handle-login", async () => {
     if (!CLOUD_FEATURES_ENABLED) {
       console.warn("Cloud features disabled, cannot handle login");

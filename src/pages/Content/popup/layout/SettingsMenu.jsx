@@ -866,6 +866,17 @@ const SettingsMenu = (props) => {
                   "Log in or sign up"}
             </DropdownMenu.Item>
           )}
+          <DropdownMenu.Item
+            className="DropdownMenuItem"
+            onSelect={async (e) => {
+              e.preventDefault();
+              await chrome.storage.local.remove(["destination"]);
+              setContentState((prev) => ({ ...prev, showDestinationPicker: true, destination: null }));
+              props.setOpen(false);
+            }}
+          >
+            Change destination
+          </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

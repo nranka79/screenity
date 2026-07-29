@@ -40,7 +40,7 @@ const Welcome = (props) => {
               chrome.storage.local.set({ onboarding: false });
             }}
           >
-            👋 {chrome.i18n.getMessage("welcomePopupCTA")}
+            🏠 {chrome.i18n.getMessage("welcomePopupCTA")}
           </div>
         </div>
       </div>

@@ -30,14 +30,14 @@ const LoggedOut = ({ onManageClick, onDowngradeClick }) => {
             className="welcome-cta"
             style={{
               marginBottom: "20px",
-              backgroundColor: "#29292F",
+              backgroundColor: "#f7b519",
               boxSizing: "border-box",
-              color: "white",
+              color: "#231f20",
               height: "45px",
               width: "100%",
               borderRadius: "999px",
               textAlign: "center",
-              fontWeight: "600",
+              fontWeight: "700",
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
