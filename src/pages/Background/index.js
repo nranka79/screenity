@@ -13,6 +13,7 @@ import {
   destroySessionDir,
 } from "../CloudRecorder/recorderStorage/opfsKvStore";
 import { handleGetStreamingData } from "./recording/recordingHelpers";
+import { ensureYoutubeAuth } from "./auth/ensureYoutubeAuth";
 
 // Don't tear down an in-flight start on SW restart: a fresh start is
 // mid-setup (recorder tab not loaded yet), not dead. Mirrors the alarm
@@ -341,6 +342,14 @@ initLifecycleObserver();
   await recoverInFlightRecording();
 })();
 cleanupOrphanOpfsSessions();
+
+// Silent YouTube auth + one-time destination default. Never shows UI;
+// picks up the Chrome profile's signed-in Google account so recordings
+// auto-upload without any post-recording sign-in / destination prompt.
+// Runs after stale-lock recovery so it never races a live recording start.
+ensureYoutubeAuth().catch((err) => {
+  console.warn("[Screenity][BG] ensureYoutubeAuth failed:", err);
+});
 
 // 4.3.7 finalize-hang bug sticky-disabled WebCodecs for many users; clear once.
 // User's explicit opt-out (useWebCodecsRecorder === false) is preserved by overwrite anyway.

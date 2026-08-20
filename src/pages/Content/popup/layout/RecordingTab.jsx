@@ -26,6 +26,60 @@ const RecordingTab = (props) => {
 
   const [tabRecordingDisabled, setTabRecordingDisabled] = useState(false);
   const [showModalSoon, setShowModalSoon] = useState(false); // 👈 NEW
+  const [youtubeConnected, setYoutubeConnected] = useState(true);
+  const [youtubeConnecting, setYoutubeConnecting] = useState(false);
+
+  // One-time connect banner: when auto-upload targets YouTube but no token
+  // exists yet (silent Chrome-session pickup failed), offer a one-time
+  // interactive sign-in right from the popup.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { destination, youtubeToken } = await chrome.storage.local.get([
+          "destination",
+          "youtubeToken",
+        ]);
+        if (cancelled) return;
+        setYoutubeConnected(
+          destination !== "youtube" || Boolean(youtubeToken),
+        );
+      } catch {
+        if (!cancelled) setYoutubeConnected(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const connectYoutube = async () => {
+    setYoutubeConnecting(true);
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: "sign-in-for-destination",
+        destination: "youtube",
+        scope: "https://www.googleapis.com/auth/youtube.upload",
+      });
+      if (result?.status === "ok") {
+        await chrome.storage.local.set({ destination: "youtube" });
+        setYoutubeConnected(true);
+        contentState.openToast?.(
+          "Connected to YouTube. Recordings will auto-upload.",
+          4000
+        );
+      } else {
+        contentState.openToast?.(
+          result?.error || "YouTube sign-in failed",
+          4000
+        );
+      }
+    } catch (err) {
+      contentState.openToast?.(err.message || "YouTube sign-in failed", 4000);
+    } finally {
+      setYoutubeConnecting(false);
+    }
+  };
 
   // On pages that can't do tab/region capture (chrome://, app pages),
   // swap the visible selection to "screen" but don't persist; the
@@ -142,6 +196,47 @@ const RecordingTab = (props) => {
                 <img src={CloseWhiteIcon} alt="Close" />
               </div>
             </div>
+          </div>
+        )}
+        {!youtubeConnected && (
+          <div
+            className="youtubeConnectBanner"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "8px",
+              padding: "8px 12px",
+              marginBottom: "8px",
+              borderRadius: "8px",
+              border: "1px solid #f0d28a",
+              background: "#FEF7E6",
+              fontSize: "12px",
+              color: "#231f20",
+            }}
+          >
+            <span>
+              Recordings auto-upload to YouTube — connect once to enable it.
+            </span>
+            <button
+              className="youtubeConnectButton"
+              disabled={youtubeConnecting}
+              onClick={connectYoutube}
+              style={{
+                border: "none",
+                borderRadius: "6px",
+                padding: "6px 12px",
+                background: "#f7b519",
+                color: "#231f20",
+                fontSize: "12px",
+                fontWeight: 600,
+                cursor: youtubeConnecting ? "default" : "pointer",
+                opacity: youtubeConnecting ? 0.6 : 1,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {youtubeConnecting ? "Connecting…" : "Connect YouTube"}
+            </button>
           </div>
         )}
         <Tabs.List

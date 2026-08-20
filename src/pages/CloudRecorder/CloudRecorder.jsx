@@ -231,6 +231,11 @@ const CloudRecorder = () => {
   const localScreenPlaybackOfferRef = useRef(null);
   const emptyCleanupRef = useRef(false);
 
+  // YouTube streaming upload while recording (destination === "youtube").
+  const youtubeStreamEnabledRef = useRef(false);
+  const youtubeStreamStartedRef = useRef(false);
+  const youtubeStreamFinalizeDoneRef = useRef(false);
+
   const audioInputGain = useRef(null);
   const audioOutputGain = useRef(null);
 
@@ -2881,6 +2886,124 @@ const CloudRecorder = () => {
     }
   };
 
+  // ---- YouTube streaming upload while recording ----
+  // Forward each recorded chunk to the background, which streams it into a
+  // YouTube resumable session as it is produced. Finalize happens on stop.
+  const youtubeStreamChainRef = useRef(Promise.resolve());
+  const youtubeStreamStartPromiseRef = useRef(null);
+
+  const getYoutubeStreamTitle = () =>
+    `NDR-Screenity Recording ${new Date().toISOString().slice(0, 10)}`;
+
+  const startYoutubeStreamIfNeeded = () => {
+    if (youtubeStreamStartedRef.current) {
+      return youtubeStreamStartPromiseRef.current || Promise.resolve();
+    }
+    youtubeStreamStartedRef.current = true;
+    const startPromise = (async () => {
+      try {
+        const { destination } = await chrome.storage.local.get(["destination"]);
+        if (destination !== "youtube") {
+          youtubeStreamEnabledRef.current = false;
+          return;
+        }
+        const sessionId = ensureRecordingSessionId();
+        const res = await chrome.runtime
+          .sendMessage({
+            type: "youtube-stream-start",
+            sessionId,
+            title: getYoutubeStreamTitle(),
+          })
+          .catch(() => null);
+        if (res?.status === "ok") {
+          youtubeStreamEnabledRef.current = true;
+          console.info(
+            "[Screenity] YouTube streaming upload enabled for session",
+            sessionId,
+          );
+        } else {
+          youtubeStreamEnabledRef.current = false;
+        }
+      } catch (err) {
+        console.warn("[Screenity] youtube stream start failed:", err);
+        youtubeStreamEnabledRef.current = false;
+      }
+    })();
+    youtubeStreamStartPromiseRef.current = startPromise;
+    return startPromise;
+  };
+
+  const forwardScreenChunkToYoutube = (index, blob) => {
+    if (!youtubeStreamStartedRef.current || youtubeStreamFinalizeDoneRef.current) {
+      return;
+    }
+    const sessionId = ensureRecordingSessionId();
+    // Serialize sends so index order is preserved across out-of-order
+    // MediaRecorder/WebCodecs callbacks, and wait for the session handshake
+    // so the very first chunk isn't dropped.
+    const chain = youtubeStreamChainRef.current
+      .then(() => startYoutubeStreamIfNeeded())
+      .then(async () => {
+        if (!youtubeStreamEnabledRef.current) return;
+        try {
+          await chrome.runtime.sendMessage({
+            type: "youtube-stream-chunk",
+            sessionId,
+            index,
+            blob,
+          });
+        } catch {
+          // Non-fatal: background handles gaps by its own ordering.
+        }
+      });
+    youtubeStreamChainRef.current = chain;
+  };
+
+  const finalizeYoutubeStream = async () => {
+    if (!youtubeStreamStartedRef.current || youtubeStreamFinalizeDoneRef.current) {
+      return null;
+    }
+    youtubeStreamFinalizeDoneRef.current = true;
+    // Let any in-flight chunk messages drain first.
+    await youtubeStreamChainRef.current.catch(() => {});
+    try {
+      const res = await chrome.runtime
+        .sendMessage({
+          type: "youtube-stream-finalize",
+          sessionId: ensureRecordingSessionId(),
+        })
+        .catch(() => null);
+      if (res?.status === "ok") {
+        await chrome.storage.local.set({
+          youtubeStreamFinalize: {
+            at: Date.now(),
+            status: "ok",
+            url: res.url || "",
+            videoId: res.videoId || null,
+          },
+        });
+        console.info("[Screenity] YouTube stream finalize OK:", res);
+        return res;
+      }
+      console.warn("[Screenity] YouTube stream finalize incomplete:", res?.status, res?.error || res?.reason);
+      await chrome.storage.local.set({
+        youtubeStreamFinalize: { at: Date.now(), status: "incomplete" },
+      });
+      return res;
+    } catch (err) {
+      console.warn("[Screenity] youtube stream finalize failed:", err);
+      return null;
+    }
+  };
+
+  const abortYoutubeStream = async () => {
+    if (!youtubeStreamStartedRef.current) return;
+    youtubeStreamEnabledRef.current = false;
+    youtubeStreamFinalizeDoneRef.current = true;
+    const sessionId = ensureRecordingSessionId();
+    chrome.runtime.sendMessage({ type: "youtube-stream-abort", sessionId }).catch(() => {});
+  };
+
   const deleteProject = async (projectId, uploadMeta, deleteVideo = true) => {
     const screenMeta = uploadMeta?.screen;
     const cameraMeta = uploadMeta?.camera;
@@ -4074,6 +4197,7 @@ const CloudRecorder = () => {
               hasChunks.current = true;
               lastTimecode.current = timestamp;
               firstChunkTime.current = timestamp;
+              void startYoutubeStreamIfNeeded();
               chrome.runtime
                 .sendMessage({ type: "cancel-first-chunk-watchdog" })
                 .catch(() => {});
@@ -4117,6 +4241,8 @@ const CloudRecorder = () => {
             });
 
             persistSessionState({ lastChunkIndex: index.current });
+
+            forwardScreenChunkToYoutube(index.current, blob);
 
             if (uploadersInitialized.current && screenUploader.current) {
               try {
@@ -5507,6 +5633,7 @@ const CloudRecorder = () => {
       emitRecordingOutcome("abandoned", {
         reason: reason || "stop-without-finalize",
       });
+      void abortYoutubeStream();
       try {
         await chrome.storage.local.set({ sceneIdStatus: "cancelled" });
       } catch {}
@@ -5523,6 +5650,10 @@ const CloudRecorder = () => {
     const durations = calculateDurations();
 
     await flushPendingChunks();
+
+    // Finalize the YouTube streaming session (upload runs during recording,
+    // so this just completes the resumable upload).
+    await finalizeYoutubeStream();
 
     let finalizeError = null;
     const finalizeSkipped = [];

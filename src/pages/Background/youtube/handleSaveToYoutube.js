@@ -12,6 +12,14 @@ const MAX_STALL_ROUNDS = 4;
 
 const YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube.upload";
 
+// Background pipelines (auto-upload, streaming) must NEVER pop the Google
+// account UI by themselves. Only user-initiated flows (editor button, popup
+// destination picker) may set allowInteractive=true.
+const signInYoutubeSilent = async () => {
+  const token = await signIn(YOUTUBE_SCOPE, { allowInteractive: false });
+  return token;
+};
+
 const getYoutubeToken = async () => {
   log("getYoutubeToken: checking stored youtubeToken");
   return new Promise((resolve, reject) => {
@@ -25,7 +33,7 @@ const getYoutubeToken = async () => {
       if (!token) {
         log("getYoutubeToken: no stored token, triggering sign-in");
         try {
-          const newToken = await signInYoutube();
+          const newToken = await signInYoutubeSilent();
           if (!newToken) {
             reject(new Error("YouTube sign-in failed"));
             return;
@@ -57,7 +65,7 @@ const getYoutubeToken = async () => {
       if (needsRefresh) {
         log("getYoutubeToken: token expiring soon, re-signing in");
         try {
-          const newToken = await signInYoutube();
+          const newToken = await signInYoutubeSilent();
           if (!newToken) {
             reject(new Error("YouTube re-sign-in failed"));
           } else {
@@ -76,10 +84,13 @@ const getYoutubeToken = async () => {
   });
 };
 
-const signInYoutube = async () => {
+const signInYoutube = async (opts = {}) => {
   log("=== signInYoutube ===");
   try {
-    const token = await signIn(YOUTUBE_SCOPE);
+    const token = await signIn(YOUTUBE_SCOPE, {
+      allowInteractive: opts?.allowInteractive === true,
+      forceRefresh: opts?.forceRefresh === true,
+    });
     log("signInYoutube succeeded, token length =", token.length);
     return token;
   } catch (caughtErr) {
@@ -259,7 +270,7 @@ const saveToYoutube = async (videoBlob, fileName, onProgress) => {
         warn("token cleanup error:", cleanupErr.message);
       }
       await chrome.storage.local.remove(["youtubeToken"]);
-      token = await signInYoutube();
+      token = await signInYoutube({ forceRefresh: true });
       if (!token) throw new Error("YouTube sign-in failed");
       log("forceRefresh: new token obtained");
     } else {
@@ -358,7 +369,7 @@ export const checkYoutubeAuth = async () => {
 export const handleSignInYoutube = async () => {
   log("=== handleSignInYoutube ===");
   try {
-    const token = await signInYoutube();
+    const token = await signInYoutube({ allowInteractive: true });
     if (token) {
       log("handleSignInYoutube: sign-in OK, token length =", token.length);
       return { status: "ok" };

@@ -18,12 +18,15 @@ const getAuthTokenForDestination = async (dest) => {
   if (dest === "drive") {
     const { token } = await chrome.storage.local.get(["token"]);
     if (token) return token;
-    return await signIn();
+    // Background pipeline: never pop the Google UI by itself.
+    return await signIn(undefined, { allowInteractive: false });
   }
   if (dest === "youtube") {
     const { youtubeToken } = await chrome.storage.local.get(["youtubeToken"]);
     if (youtubeToken) return youtubeToken;
-    return await signIn("https://www.googleapis.com/auth/youtube.upload");
+    return await signIn("https://www.googleapis.com/auth/youtube.upload", {
+      allowInteractive: false,
+    });
   }
   return null;
 };

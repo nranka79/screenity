@@ -63,10 +63,17 @@ const PopupContainer = (props) => {
 
   useEffect(() => {
     chrome.storage.local.get(["destination", "onboarding", "showProSplash"], (result) => {
-      if (!result.destination || result.destination === "local") {
-        setShowDestinationPicker(!result.destination);
-      } else {
-        setShowDestinationPicker(false);
+      // Auto-upload destination: background ensureYoutubeAuth() defaults it
+      // to "youtube", so never force the destination picker on popup open.
+      // The picker stays reachable via Settings → "Change destination".
+      setShowDestinationPicker(false);
+      const dest = result.destination;
+      if (!dest || dest === "local") {
+        setContentState((prevContentState) => ({
+          ...prevContentState,
+          showDestinationPicker: false,
+          destination: dest || "youtube",
+        }));
       }
       const nextOnboarding = Boolean(result.onboarding);
       const nextShowProSplash = Boolean(result.showProSplash);

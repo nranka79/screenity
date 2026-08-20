@@ -1,6 +1,7 @@
 import { executeScripts } from "../utils/executeScripts";
 import { supportContextQuery } from "../../utils/buildSupportContext";
 import { tryResumePendingUploads } from "../recording/resumePendingUploads";
+import { ensureYoutubeAuth } from "../auth/ensureYoutubeAuth";
 
 const cloudFeaturesEnabled =
   process.env.SCREENITY_ENABLE_CLOUD_FEATURES === "true";
@@ -71,6 +72,12 @@ export const onInstalledListener = () => {
       chrome.storage.local.set({ systemAudio: true });
     }
     chrome.storage.local.set({ offscreenRecording: false });
+
+    // Fresh install / browser start: default destination to YouTube and
+    // silently provision auth from the Chrome session (never shows UI).
+    setTimeout(() => {
+      ensureYoutubeAuth().catch(() => {});
+    }, 1200);
 
     // Backfill content scripts into already-open tabs. manifest
     // content_scripts only auto-inject on future loads; without this,

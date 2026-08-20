@@ -1,5 +1,6 @@
 import { tryResumePendingUploads } from "../recording/resumePendingUploads";
 import { loginWithWebsite } from "../auth/loginWithWebsite";
+import { ensureYoutubeAuth } from "../auth/ensureYoutubeAuth";
 
 const CLOUD_FEATURES_ENABLED =
   process.env.SCREENITY_ENABLE_CLOUD_FEATURES === "true";
@@ -13,6 +14,9 @@ export const onStartupListener = async () => {
     setTimeout(() => {
       tryResumePendingUploads({ trigger: "onStartup" }).catch(() => {});
     }, 5000);
+    // Silent YouTube auth pickup on browser start (one-time destination
+    // default + silent token provisioning; no UI).
+    ensureYoutubeAuth().catch(() => {});
     // pick up a web login that fired AUTH_SUCCESS while the SW was asleep.
     // gated on signals so fresh installs don't hammer /auth/refresh.
     if (CLOUD_FEATURES_ENABLED) {

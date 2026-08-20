@@ -23,6 +23,12 @@ import { handleSaveToDrive } from "../drive/handleSaveToDrive";
 import { uploadChunksFromStore } from "../upload/StreamUploadManager";
 import { handleSaveToS3 } from "../s3/handleSaveToS3";
 import { handleSaveToYoutube, signOutYoutube, checkYoutubeAuth, handleSignInYoutube } from "../youtube/handleSaveToYoutube";
+import {
+  handleStreamStart,
+  handleStreamChunk,
+  handleStreamFinalize,
+  handleStreamAbort,
+} from "../youtube/streamSessions";
 import signIn from "../modules/signIn";
 import { addAlarmListener } from "../alarms/addAlarmListener";
 import { cancelRecording, handleDismiss } from "../recording/cancelRecording";
@@ -1837,7 +1843,9 @@ export const setupHandlers = () => {
     async (message) => {
       try {
         const scope = message?.scope || undefined;
-        const token = await signIn(scope);
+        // User-initiated (destination picker / settings): a one-time
+        // interactive sign-in is allowed here.
+        const token = await signIn(scope, { allowInteractive: true });
         if (!token) {
           return { status: "error", error: "Sign-in returned no token" };
         }
@@ -1854,6 +1862,22 @@ export const setupHandlers = () => {
       await signOutYoutube();
       return { status: "ok" };
     },
+  );
+  registerMessage(
+    "youtube-stream-start",
+    async (message) => await handleStreamStart(message || {}),
+  );
+  registerMessage(
+    "youtube-stream-chunk",
+    async (message) => await handleStreamChunk(message || {}),
+  );
+  registerMessage(
+    "youtube-stream-finalize",
+    async (message) => await handleStreamFinalize(message || {}),
+  );
+  registerMessage(
+    "youtube-stream-abort",
+    async (message) => await handleStreamAbort(message || {}),
   );
   registerMessage("request-download", (message) =>
     requestDownload(message.base64, message.title),
@@ -1914,12 +1938,44 @@ export const setupHandlers = () => {
   );
   registerMessage("trigger-auto-upload", async () => {
     try {
-      const { destination, lastRecordingBackendRef } = await chrome.storage.local.get([
-        "destination", "lastRecordingBackendRef",
+      const { destination, lastRecordingBackendRef, youtubeStreamFinalize } = await chrome.storage.local.get([
+        "destination", "lastRecordingBackendRef", "youtubeStreamFinalize",
       ]);
       if (!destination || destination === "local") {
         return { status: "skipped", reason: "no-destination" };
       }
+
+      // Streaming finalize already completed the upload while recording:
+      // skip the post-stop full re-upload entirely.
+      if (
+        youtubeStreamFinalize?.status === "ok" &&
+        youtubeStreamFinalize?.at &&
+        Date.now() - youtubeStreamFinalize.at < 10 * 60 * 1000
+      ) {
+        const { activeTab } = await chrome.storage.local.get(["activeTab"]);
+        const streamUrl = youtubeStreamFinalize.url || "";
+        const message = streamUrl
+          ? `✅ Uploaded to ${destination}: ${streamUrl}`
+          : `✅ Uploaded to ${destination}`;
+        if (activeTab) {
+          const { sendMessageTab } = await import("../tabManagement");
+          await sendMessageTab(activeTab, {
+            type: "show-toast",
+            message,
+            timeout: 15000,
+          }).catch(() => {});
+        }
+        if (streamUrl) {
+          copyToClipboard(streamUrl);
+        }
+        return {
+          status: "ok",
+          source: "stream",
+          url: streamUrl,
+          videoId: youtubeStreamFinalize.videoId,
+        };
+      }
+
       const fileName = `NDR-Screenity Recording ${new Date().toISOString().slice(0, 10)}`;
 
       let store;
